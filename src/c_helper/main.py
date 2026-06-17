@@ -111,31 +111,94 @@ class AIClient:
         if not choices:
             raise ValueError("AI 返回空 choices")
         content = choices[0].get("message", {}).get("content", "")
+        if self.config.output_mode == "raw":
+            return content.strip()
         return self._sanitize(content)
 
     @staticmethod
     def _sanitize(text: str) -> str:
         """
-        清洗 AI 返回的 Markdown 代码块污染：
-        - 去掉 ```c / ``` 等围栏代码块标记
-        - 去掉语言标识（如 c, cpp, python）
-        - 清理末尾残留的反引号、大括号、空行
+        清洗 AI 返回的 Markdown/网页编辑器污染：
+        - 去掉 ```c / ``` 围栏标记
+        - 修复不规则缩进（统一为 4 空格）
+        - 删除末尾多余的孤立大括号（平衡检查）
+        - 去掉尾部空行与反引号残留
         """
         text = text.strip()
 
-        # 去掉开头的围栏代码块标记: ```c 或 ```
+        # 1. 去掉 Markdown 围栏代码块标记
         text = re.sub(r"^```\w*\s*", "", text)
-        # 去掉结尾的围栏代码块标记: ```
         text = re.sub(r"\s*```\s*$", "", text)
 
-        # 清理末尾可能残留的孤立符号（AI 常见的格式错误）
-        # 例如多出一个 } 或 ``` 的残留
+        # 2. 去掉末尾空行和反引号残留（保留大括号，下一步再平衡）
         lines = text.splitlines()
-        while lines and lines[-1].strip() in ("", "}", "```", "`"):
+        while lines and lines[-1].strip() in ("", "```", "`"):
             lines.pop()
-        text = "\n".join(lines)
 
-        return text
+        # 3. 大括号平衡检查：从末尾逐个去掉导致不平衡的孤立 "}"
+        while lines:
+            stripped = lines[-1].strip()
+            if stripped == "}":
+                joined = "\n".join(lines)
+                open_count = joined.count("{")
+                close_count = joined.count("}")
+                if close_count > open_count:
+                    lines.pop()
+                    continue
+            break
+
+        # 4. 修复缩进：统一为 4 空格层级
+        lines = _fix_indent(lines)
+
+        return "\n".join(lines)
+
+
+def _fix_indent(lines: list[str]) -> list[str]:
+    """将混合 tab/不规则空格缩进修复为标准的 4 空格层级。"""
+    if not lines:
+        return lines
+
+    # 先全部展开为空格（tab = 4 空格）
+    expanded = [line.replace("\t", "    ") for line in lines]
+
+    # 计算非空行的最小前导空格
+    indents = []
+    for line in expanded:
+        stripped = line.lstrip(" ")
+        if stripped:
+            indents.append(len(line) - len(stripped))
+    if not indents:
+        return expanded
+
+    min_indent = min(indents)
+    unique_indents = sorted(set(indents))
+
+    # 如果最小缩进不是 0，全部左移
+    if min_indent > 0:
+        expanded = [line[min_indent:] if line.strip() else line for line in expanded]
+        unique_indents = [i - min_indent for i in unique_indents]
+
+    # 检测缩进步长：通常是 4 或 8
+    # 如果检测到 8 空格为主，说明 AI/编辑器用了 8 空格缩进，转为 4
+    step = 4
+    if len(unique_indents) > 1:
+        gaps = [unique_indents[i + 1] - unique_indents[i] for i in range(len(unique_indents) - 1)]
+        if gaps and all(g % 8 == 0 for g in gaps if g > 0):
+            step = 8
+
+    if step == 8:
+        # 8 空格 → 4 空格：层级减半
+        fixed = []
+        for line in expanded:
+            stripped = line.lstrip(" ")
+            if stripped:
+                level = (len(line) - len(stripped)) // 8
+                fixed.append("    " * level + stripped)
+            else:
+                fixed.append(line)
+        return fixed
+
+    return expanded
 
     def health_check(self) -> tuple[bool, str]:
         """启动时检查 API 可用性。返回 (是否可用, 状态信息)。"""

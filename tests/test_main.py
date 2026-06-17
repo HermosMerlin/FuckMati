@@ -29,6 +29,7 @@ class TestAIClient:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         client = AIClient(config)
@@ -58,6 +59,7 @@ class TestAIClient:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         client = AIClient(config)
@@ -85,6 +87,7 @@ class TestTyper:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="",
         )
         typer = Typer(config)
@@ -112,6 +115,7 @@ class TestTyper:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="",
         )
         typer = Typer(config)
@@ -137,6 +141,7 @@ class TestWorker:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         sm = MagicMock()
@@ -171,6 +176,7 @@ class TestWorker:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         sm = MagicMock()
@@ -199,6 +205,7 @@ class TestWorker:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         sm = MagicMock()
@@ -233,6 +240,7 @@ class TestAppInitialization:
             long_pause_chance=0.0,
             long_pause_min_ms=3000,
             long_pause_max_ms=12000,
+            output_mode="optimized",
             system_prompt="test",
         )
         mock_config_load.return_value = mock_config
@@ -240,3 +248,35 @@ class TestAppInitialization:
         app = App("config.json")
         assert app.config.api_key == "sk-test"
         assert app.sm.state == State.IDLE
+
+
+class TestSanitize:
+    def test_sanitize_removes_markdown_fence(self) -> None:
+        raw = "```c\nint main() {}\n```"
+        assert AIClient._sanitize(raw) == "int main() {}"
+
+    def test_sanitize_fixes_extra_braces(self) -> None:
+        """末尾有多余大括号时自动去掉，只保留平衡的闭合"""
+        raw = """#include <stdio.h>
+
+int main() {
+        int a = 1;
+        return 0;
+}
+}
+}"""
+        result = AIClient._sanitize(raw)
+        assert result.count("{") == result.count("}")
+        assert result.endswith("}")
+        # 末尾不应残留多余大括号
+        lines = result.splitlines()
+        assert lines[-1].strip() == "}"
+        assert lines[-2].strip() == "return 0;"
+
+    def test_sanitize_fixes_indent(self) -> None:
+        """8 空格缩进 → 4 空格缩进"""
+        raw = "int main() {\n        int a;\n        if (1) {\n                int b;\n        }\n}"
+        result = AIClient._sanitize(raw)
+        lines = result.splitlines()
+        assert lines[1] == "    int a;"
+        assert lines[3] == "        int b;"
