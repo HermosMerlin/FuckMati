@@ -33,11 +33,34 @@ class Config:
     long_pause_max_ms: int
     system_prompt: str
 
+    _DEFAULT_CONFIG = {
+        "api_key": "",
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o-mini",
+        "typing_delay_ms": 80,
+        "typing_jitter": True,
+        "typing_jitter_range_ms": 20,
+        "long_pause_enabled": True,
+        "long_pause_chance": 0.3,
+        "long_pause_min_ms": 3000,
+        "long_pause_max_ms": 12000,
+        "system_prompt": (
+            "你是一位C语言编程专家。用户会粘贴一道C语言题目，"
+            "请直接给出完整、可编译的C语言代码作为答案。"
+            "注意：代码中不要包含任何注释，不要包含解释说明，只输出纯代码。"
+        ),
+    }
+
     @classmethod
     def load(cls, path: Path | str = "config.json") -> "Config":
         p = Path(path)
         if not p.exists():
-            raise FileNotFoundError(f"配置文件不存在: {p.absolute()}")
+            # 自动生成默认配置模板
+            with p.open("w", encoding="utf-8") as f:
+                json.dump(cls._DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
+                f.write("\n")
+            log.warning("配置文件不存在，已自动生成模板: %s", p.absolute())
+
         with p.open("r", encoding="utf-8") as f:
             data = json.load(f)
         return cls(
@@ -53,7 +76,7 @@ class Config:
             long_pause_max_ms=data.get("long_pause_max_ms", 12000),
             system_prompt=data.get(
                 "system_prompt",
-                "你是一位C语言编程专家。用户会粘贴一道C语言题目，请直接给出完整、可编译的C语言代码作为答案。注意：代码中不要包含任何注释，不要包含解释说明，只输出纯代码。",
+                cls._DEFAULT_CONFIG["system_prompt"],
             ),
         )
 

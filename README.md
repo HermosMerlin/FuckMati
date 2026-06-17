@@ -6,7 +6,7 @@
 
 ```powershell
 # 1. 克隆
-gh repo clone Cheezyun/FuckMati
+gh repo clone HermosMerlin/FuckMati
 cd FuckMati
 
 # 2. 创建虚拟环境并安装依赖
@@ -14,8 +14,8 @@ uv venv
 .venv\Scripts\activate
 uv pip install -e ".[dev]"
 
-# 3. 配置 API 密钥
-# 编辑 config.json，填入你的 api_key 和 base_url
+# 3. 第一次运行会自动生成 config.json，编辑填入你的 api_key
+notepad config.json
 ```
 
 ## 使用

@@ -37,9 +37,13 @@ class TestConfig:
         assert cfg.typing_jitter is False
         assert cfg.typing_delay_ms == 50
 
-    def test_load_missing_file(self, tmp_path: Path) -> None:
-        with pytest.raises(FileNotFoundError):
-            Config.load(tmp_path / "nonexistent.json")
+    def test_load_missing_file_creates_default(self, tmp_path: Path) -> None:
+        config_path = tmp_path / "config.json"
+        assert not config_path.exists()
+        cfg = Config.load(config_path)
+        assert config_path.exists()  # 自动创建了模板
+        assert cfg.api_key == ""  # 默认空值
+        assert cfg.base_url == "https://api.openai.com/v1"
 
 
 class TestStateMachine:
