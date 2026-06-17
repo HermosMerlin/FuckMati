@@ -1,0 +1,31 @@
+# C语言题目后台助手
+
+后台常驻桌面小工具，全局快捷键触发，托盘颜色直观反馈状态，AI 辅助生成 C 语言答案。
+
+## 部署
+
+```powershell
+# 1. 克隆
+gh repo clone Cheezyun/FuckMati
+cd FuckMati
+
+# 2. 创建虚拟环境并安装依赖
+uv venv
+.venv\Scripts\activate
+uv pip install -e ".[dev]"
+
+# 3. 配置 API 密钥
+# 编辑 config.json，填入你的 api_key 和 base_url
+```
+
+## 使用
+
+```powershell
+# 前台运行（看日志）
+.\run.bat
+
+# 后台静默运行
+.\start-hidden.vbs
+```
+
+按 **Ctrl+Alt+G** 循环触发：检测 API → 读取剪贴板 → 请求 AI → 模拟键盘输出答案。托盘右键可强制重置或退出。
