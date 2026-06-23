@@ -33,3 +33,13 @@ Thumbs.db
 
 # opencode
 .omo/
+
+# AI 助手文档（本地参考，不入库）
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+COPILOT.md
+.cursorrules
+.cursor/
+.github/copilot-instructions.md
+.opencode/
