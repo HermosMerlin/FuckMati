@@ -183,6 +183,16 @@ class Typer:
         self.config = config
         self.controller = Controller()
 
+    def type_char(self, ch: str) -> None:
+        """输出单个字符，不含延迟和布局切换。"""
+        self.controller.type(ch)
+        # editor_auto_brace：输出 { 后删除编辑器自动补全的 }
+        if ch == "{" and self.config.editor_auto_brace:
+            self.controller.press(Key.end)
+            self.controller.release(Key.end)
+            self.controller.press(Key.backspace)
+            self.controller.release(Key.backspace)
+
     def type_text(self, text: str) -> None:
         """
         在前台窗口模拟逐字输入，带延迟、随机抖动和智能停顿。
@@ -212,14 +222,7 @@ class Typer:
                 time.sleep(0.05)
 
             for ch in text:
-                self.controller.type(ch)
-
-                # editor_auto_brace：输出 { 后删除编辑器自动补全的 }
-                if ch == "{" and self.config.editor_auto_brace:
-                    self.controller.press(Key.end)
-                    self.controller.release(Key.end)
-                    self.controller.press(Key.backspace)
-                    self.controller.release(Key.backspace)
+                self.type_char(ch)
 
                 delay = base_delay
                 if jitter:
@@ -317,6 +320,9 @@ class Worker:
         self.typer = Typer(config)
         self.q: queue.Queue[Callable[[], None]] = queue.Queue()
         self._cached_answer: str = ""
+        self._manual_answer: str = ""
+        self._manual_idx: int = 0
+        self._manual_active: bool = False
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -345,7 +351,10 @@ class Worker:
             log.debug("正在检测 API，忽略热键")
         elif state is State.READY:
             if self._cached_answer:
-                self._do_type()
+                if self.config.typing_mode == "manual":
+                    self._start_manual()
+                else:
+                    self._do_type()
             else:
                 self._do_request()
         elif state is State.ERROR:
@@ -400,8 +409,43 @@ class Worker:
             self.tray.set_state(State.READY)
             log.info("输出完成，系统就绪")
 
+    def _start_manual(self) -> None:
+        if not self.sm.transition(State.TYPING):
+            return
+        self.tray.set_state(State.TYPING)
+        self._manual_answer = self._cached_answer
+        self._manual_idx = 0
+        self._manual_active = True
+        log.info("进入手动输出模式，按 a-z 逐字输出，ESC 终止")
+
+    def _type_next_char(self) -> None:
+        if not self._manual_active:
+            return
+        if self._manual_idx >= len(self._manual_answer):
+            self._terminate_manual()
+            return
+        ch = self._manual_answer[self._manual_idx]
+        self._manual_idx += 1
+        self.typer.type_char(ch)
+        if self._manual_idx >= len(self._manual_answer):
+            self._terminate_manual()
+
+    def _terminate_manual(self) -> None:
+        if not self._manual_active:
+            return
+        self._manual_active = False
+        self._manual_answer = ""
+        self._manual_idx = 0
+        self._cached_answer = ""
+        self.sm.transition(State.READY)
+        self.tray.set_state(State.READY)
+        log.info("手动输出完成")
+
     def force_reset(self) -> None:
         self._cached_answer = ""
+        self._manual_answer = ""
+        self._manual_idx = 0
+        self._manual_active = False
         self.sm.force_reset()
         self.tray.set_state(State.IDLE)
 
@@ -411,10 +455,17 @@ class Worker:
 # ---------------------------------------------------------------------------
 class HotkeyManager:
     """
-    Ctrl+G 全局热键。
+    Ctrl+Alt+G 全局热键。
     Windows WH_KEYBOARD_LL 必须在主线程运行，因此 Listener 在主线程阻塞。
     热键回调只做一件事：向 Worker Queue 投递轻量任务，绝不阻塞。
     """
+
+    _WM_KEYDOWN = 256
+    _WM_SYSKEYDOWN = 260
+    _LLKHF_INJECTED = 0x10
+    _VK_ESCAPE = 0x1B
+    _VK_A = 0x41
+    _VK_Z = 0x5A
 
     def __init__(self, worker: Worker, tray: TrayManager):
         self.worker = worker
@@ -437,11 +488,35 @@ class HotkeyManager:
                 return False
             hotkey.release(self._listener.canonical(key))
 
-        self._listener = Listener(on_press=on_press, on_release=on_release)
+        self._listener = Listener(on_press=on_press, on_release=on_release, event_filter=self._event_filter)
         self._listener.start()
         log.info("热键 Ctrl+Alt+G 已注册")
         self._listener.join()
         log.info("热键监听已结束")
+
+    def _event_filter(self, msg, data):
+        # 只在手动模式 TYPING 状态下拦截
+        if self.worker.config.typing_mode != "manual":
+            return None
+        if self.worker.sm.state is not State.TYPING:
+            return None
+        # 跳过注入事件（我们自己 Controller.type 产生的）
+        if data.flags & self._LLKHF_INJECTED:
+            return None
+        # 只处理 key-down
+        if msg not in (self._WM_KEYDOWN, self._WM_SYSKEYDOWN):
+            return None
+        vk = data.vkCode
+        if vk == self._VK_ESCAPE:  # ESC → 终止
+            self.worker.submit(self.worker._terminate_manual)
+            self._listener.suppress_event()
+            return
+        if self._VK_A <= vk <= self._VK_Z:  # a-z → 输出下一字符
+            self.worker.submit(self.worker._type_next_char)
+            self._listener.suppress_event()
+            return
+        # 其他按键放行（Enter, Backspace, 方向键等）
+        return None
 
     def stop(self) -> None:
         self._running = False

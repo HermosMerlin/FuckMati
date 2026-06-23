@@ -1,4 +1,5 @@
 """Integration tests for c_helper.main module."""
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -400,3 +401,259 @@ int main() {
         # 缩进保持不变（由 type_text 在输出时处理）
         assert lines[1] == "        int a;"
         assert lines[3] == "                int b;"
+
+
+class TestTyperTypeChar:
+    @patch("c_helper.main.Controller")
+    def test_type_char_single(self, mock_controller_cls) -> None:
+        mock_controller = MagicMock()
+        mock_controller_cls.return_value = mock_controller
+        config = Config(
+            api_key="", base_url="", model="",
+            typing_delay_ms=10, typing_jitter=False,
+            typing_jitter_range_ms=0,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="",
+            typing_mode="auto",
+        )
+        typer = Typer(config)
+        typer.type_char("a")
+        mock_controller.type.assert_called_once_with("a")
+
+    @patch("c_helper.main.Controller")
+    def test_type_char_auto_brace(self, mock_controller_cls) -> None:
+        mock_controller = MagicMock()
+        mock_controller_cls.return_value = mock_controller
+        config = Config(
+            api_key="", base_url="", model="",
+            typing_delay_ms=10, typing_jitter=False,
+            typing_jitter_range_ms=0,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=True,
+            system_prompt="",
+            typing_mode="auto",
+        )
+        typer = Typer(config)
+        typer.type_char("{")
+        mock_controller.type.assert_called_once_with("{")
+        from pynput.keyboard import Key
+        mock_controller.press.assert_any_call(Key.end)
+        mock_controller.release.assert_any_call(Key.end)
+        mock_controller.press.assert_any_call(Key.backspace)
+        mock_controller.release.assert_any_call(Key.backspace)
+
+    @patch("c_helper.main.Controller")
+    def test_type_char_no_delay(self, mock_controller_cls) -> None:
+        mock_controller = MagicMock()
+        mock_controller_cls.return_value = mock_controller
+        config = Config(
+            api_key="", base_url="", model="",
+            typing_delay_ms=10, typing_jitter=False,
+            typing_jitter_range_ms=0,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="",
+            typing_mode="auto",
+        )
+        typer = Typer(config)
+        with patch("c_helper.main.time.sleep") as mock_sleep:
+            typer.type_char("a")
+            mock_sleep.assert_not_called()
+
+
+class TestWorkerManualMode:
+    def test_handle_hotkey_manual_starts_session(self) -> None:
+        config = Config(
+            api_key="sk", base_url="https://api.openai.com/v1", model="gpt-4",
+            typing_delay_ms=80, typing_jitter=True, typing_jitter_range_ms=20,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="test", typing_mode="manual",
+        )
+        sm = MagicMock()
+        sm.state = State.READY
+        sm.transition.return_value = True
+        tray = TrayManager(on_reset=lambda: None, on_quit=lambda: None)
+        worker = Worker(config, sm, tray)
+        worker._cached_answer = "abc"
+
+        worker.handle_hotkey()
+
+        sm.transition.assert_called_with(State.TYPING)
+        assert worker._manual_active is True
+        assert worker._manual_answer == "abc"
+        assert worker._manual_idx == 0
+
+    def test_type_next_char_advances_and_exhausts(self) -> None:
+        config = Config(
+            api_key="sk", base_url="https://api.openai.com/v1", model="gpt-4",
+            typing_delay_ms=80, typing_jitter=True, typing_jitter_range_ms=20,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="test", typing_mode="manual",
+        )
+        sm = MagicMock()
+        tray = TrayManager(on_reset=lambda: None, on_quit=lambda: None)
+        worker = Worker(config, sm, tray)
+        worker._manual_active = True
+        worker._manual_answer = "abc"
+        worker._manual_idx = 0
+        worker._cached_answer = "abc"
+
+        with patch.object(worker.typer, "type_char") as mock_type_char:
+            worker._type_next_char()
+            assert worker._manual_idx == 1
+            mock_type_char.assert_called_with("a")
+
+            worker._type_next_char()
+            assert worker._manual_idx == 2
+            mock_type_char.assert_called_with("b")
+
+            worker._type_next_char()
+            mock_type_char.assert_called_with("c")
+
+            # auto-terminate resets state
+            assert worker._manual_active is False
+            assert worker._manual_answer == ""
+            assert worker._cached_answer == ""
+            assert worker._manual_idx == 0
+            sm.transition.assert_called_with(State.READY)
+
+    def test_type_next_char_fast_typing(self) -> None:
+        config = Config(
+            api_key="sk", base_url="https://api.openai.com/v1", model="gpt-4",
+            typing_delay_ms=80, typing_jitter=True, typing_jitter_range_ms=20,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="test", typing_mode="manual",
+        )
+        sm = MagicMock()
+        tray = TrayManager(on_reset=lambda: None, on_quit=lambda: None)
+        worker = Worker(config, sm, tray)
+        worker._manual_active = True
+        worker._manual_answer = "abc"
+        worker._manual_idx = 0
+        worker._cached_answer = "abc"
+
+        with patch.object(worker.typer, "type_char") as mock_type_char:
+            worker._type_next_char()
+            worker._type_next_char()
+            worker._type_next_char()
+
+            assert mock_type_char.call_count == 3
+            mock_type_char.assert_any_call("a")
+            mock_type_char.assert_any_call("b")
+            mock_type_char.assert_any_call("c")
+            assert worker._manual_active is False
+            assert worker._manual_idx == 0
+
+    def test_handle_hotkey_auto_mode_unchanged(self) -> None:
+        config = Config(
+            api_key="sk", base_url="https://api.openai.com/v1", model="gpt-4",
+            typing_delay_ms=80, typing_jitter=True, typing_jitter_range_ms=20,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="test", typing_mode="auto",
+        )
+        sm = MagicMock()
+        sm.state = State.READY
+        sm.transition.return_value = True
+        tray = TrayManager(on_reset=lambda: None, on_quit=lambda: None)
+        worker = Worker(config, sm, tray)
+        worker._cached_answer = "abc"
+
+        with patch.object(worker, "_do_type") as mock_do_type:
+            worker.handle_hotkey()
+            mock_do_type.assert_called_once()
+            assert worker._manual_active is False
+
+
+class TestHotkeyManagerEventFilter:
+    def _make_manager(self, typing_mode="manual", state=State.TYPING):
+        config = Config(
+            api_key="sk", base_url="https://api.openai.com/v1", model="gpt-4",
+            typing_delay_ms=80, typing_jitter=True, typing_jitter_range_ms=20,
+            long_pause_enabled=False, long_pause_chance=0.0,
+            long_pause_min_ms=3000, long_pause_max_ms=12000,
+            output_mode="optimized", editor_auto_brace=False,
+            system_prompt="test", typing_mode=typing_mode,
+        )
+        sm = MagicMock()
+        sm.state = state
+        tray = TrayManager(on_reset=lambda: None, on_quit=lambda: None)
+        worker = Worker(config, sm, tray)
+        hm = HotkeyManager(worker, tray)
+        hm._listener = MagicMock()
+        return hm
+
+    def test_filter_suppresses_az_in_manual_typing(self) -> None:
+        hm = self._make_manager()
+        data = SimpleNamespace(vkCode=0x41, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_called_once_with(hm.worker._type_next_char)
+            hm._listener.suppress_event.assert_called_once()
+            assert result is None
+
+    def test_filter_esc_terminates(self) -> None:
+        hm = self._make_manager()
+        data = SimpleNamespace(vkCode=0x1B, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_called_once_with(hm.worker._terminate_manual)
+            hm._listener.suppress_event.assert_called_once()
+            assert result is None
+
+    def test_filter_enter_passes_through(self) -> None:
+        hm = self._make_manager()
+        data = SimpleNamespace(vkCode=0x0D, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_not_called()
+            hm._listener.suppress_event.assert_not_called()
+            assert result is None
+
+    def test_filter_other_keys_pass_through(self) -> None:
+        hm = self._make_manager()
+        for vk in (0x08, 0x27):
+            data = SimpleNamespace(vkCode=vk, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+            with patch.object(hm.worker, "submit") as mock_submit:
+                result = hm._event_filter(256, data)
+                mock_submit.assert_not_called()
+                hm._listener.suppress_event.assert_not_called()
+                assert result is None
+
+    def test_filter_skips_injected(self) -> None:
+        hm = self._make_manager()
+        data = SimpleNamespace(vkCode=0x41, flags=0x10, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_not_called()
+            hm._listener.suppress_event.assert_not_called()
+            assert result is None
+
+    def test_filter_noop_in_auto_mode(self) -> None:
+        hm = self._make_manager(typing_mode="auto", state=State.TYPING)
+        data = SimpleNamespace(vkCode=0x41, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_not_called()
+            hm._listener.suppress_event.assert_not_called()
+            assert result is None
+
+    def test_filter_noop_when_not_typing(self) -> None:
+        hm = self._make_manager(typing_mode="manual", state=State.READY)
+        data = SimpleNamespace(vkCode=0x41, flags=0, scanCode=0, time=0, dwExtraInfo=0)
+        with patch.object(hm.worker, "submit") as mock_submit:
+            result = hm._event_filter(256, data)
+            mock_submit.assert_not_called()
+            hm._listener.suppress_event.assert_not_called()
+            assert result is None
