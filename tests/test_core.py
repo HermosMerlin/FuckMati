@@ -15,9 +15,10 @@ class TestConfig:
         cfg = Config.load(config_path)
         assert cfg.base_url == "https://api.openai.com/v1"
         assert cfg.model == "gpt-4o-mini"
-        assert cfg.typing_delay_ms == 80
+        # 非api字段应使用当前 config.json 的调优值作为模板
+        assert cfg.typing_delay_ms == 300
         assert cfg.typing_jitter is True
-        assert cfg.typing_jitter_range_ms == 20
+        assert cfg.typing_jitter_range_ms == 100
         assert "C语言" in cfg.system_prompt
 
     def test_load_custom(self, tmp_path: Path) -> None:
@@ -44,6 +45,35 @@ class TestConfig:
         assert config_path.exists()  # 自动创建了模板
         assert cfg.api_key == ""  # 默认空值
         assert cfg.base_url == "https://api.openai.com/v1"
+
+    def test_load_empty_file_creates_template(self, tmp_path: Path) -> None:
+        """空文件（0 字节）不应崩溃，应重写为完整模板。"""
+        config_path = tmp_path / "config.json"
+        config_path.write_text("", encoding="utf-8")  # 空文件
+        cfg = Config.load(config_path)
+        # 文件应被重写为完整模板（13 个键）
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert set(data.keys()) == {
+            "api_key", "base_url", "model",
+            "typing_delay_ms", "typing_jitter", "typing_jitter_range_ms",
+            "long_pause_enabled", "long_pause_chance", "long_pause_min_ms", "long_pause_max_ms",
+            "output_mode", "editor_auto_brace", "system_prompt",
+        }
+        # 返回的 Config 应使用模板默认值
+        assert cfg.typing_delay_ms == 300
+        assert cfg.typing_jitter_range_ms == 100
+        assert cfg.api_key == ""
+
+    def test_load_invalid_json_creates_template(self, tmp_path: Path) -> None:
+        """损坏的 JSON 文件不应崩溃，应重写为完整模板。"""
+        config_path = tmp_path / "config.json"
+        config_path.write_text("garbage{{{ not json", encoding="utf-8")
+        cfg = Config.load(config_path)
+        # 文件应被重写为合法 JSON 模板
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        assert "system_prompt" in data
+        assert cfg.base_url == "https://api.openai.com/v1"
+        assert cfg.model == "gpt-4o-mini"
 
 
 class TestStateMachine:

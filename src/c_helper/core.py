@@ -39,9 +39,9 @@ class Config:
         "api_key": "",
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
-        "typing_delay_ms": 80,
+        "typing_delay_ms": 300,
         "typing_jitter": True,
-        "typing_jitter_range_ms": 20,
+        "typing_jitter_range_ms": 100,
         "long_pause_enabled": True,
         "long_pause_chance": 0.3,
         "long_pause_min_ms": 3000,
@@ -58,22 +58,34 @@ class Config:
     @classmethod
     def load(cls, path: Path | str = "config.json") -> "Config":
         p = Path(path)
-        if not p.exists():
-            # 自动生成默认配置模板
+        data: dict | None = None
+
+        # 文件存在：尝试读取；空文件或损坏 JSON 稍后重写为模板
+        if p.exists():
+            try:
+                with p.open("r", encoding="utf-8") as f:
+                    raw = f.read()
+                if raw.strip():
+                    data = json.loads(raw)
+            except json.JSONDecodeError as e:
+                log.warning("配置文件 JSON 损坏，将重写为模板: %s (%s)", p, e)
+
+        # 文件不存在、为空或损坏：自动生成默认配置模板
+        if data is None:
             with p.open("w", encoding="utf-8") as f:
                 json.dump(cls._DEFAULT_CONFIG, f, ensure_ascii=False, indent=2)
                 f.write("\n")
-            log.warning("配置文件不存在，已自动生成模板: %s", p.absolute())
+            log.warning("已自动生成配置模板: %s", p.absolute())
+            with p.open("r", encoding="utf-8") as f:
+                data = json.load(f)
 
-        with p.open("r", encoding="utf-8") as f:
-            data = json.load(f)
         return cls(
             api_key=data.get("api_key", ""),
             base_url=data.get("base_url", "https://api.openai.com/v1"),
             model=data.get("model", "gpt-4o-mini"),
-            typing_delay_ms=data.get("typing_delay_ms", 80),
+            typing_delay_ms=data.get("typing_delay_ms", 300),
             typing_jitter=data.get("typing_jitter", True),
-            typing_jitter_range_ms=data.get("typing_jitter_range_ms", 20),
+            typing_jitter_range_ms=data.get("typing_jitter_range_ms", 100),
             long_pause_enabled=data.get("long_pause_enabled", True),
             long_pause_chance=data.get("long_pause_chance", 0.3),
             long_pause_min_ms=data.get("long_pause_min_ms", 3000),
