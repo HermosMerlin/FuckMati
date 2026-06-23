@@ -27,9 +27,9 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 if not exist "config.json" (
-    echo [WARN] config.json not found. Please configure API key first.
-    pause
-    exit /b 1
+    echo [INFO] config.json not found, will auto-generate on first run.
+    echo [INFO] After startup, edit config.json to fill in your api_key,
+    echo [INFO] then right-click the tray icon and select "强制重置为空闲".
 )
 
 echo [INFO] Starting C Helper...
